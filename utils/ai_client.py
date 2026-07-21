@@ -52,6 +52,7 @@ class AIClient:
         chat_history: list = None,
         provider_id: int = None,
         model: str = None,
+        system_prompt: str = None,
         stream: bool = False,
         ip_address: str = None,
     ) -> dict:
@@ -77,7 +78,7 @@ class AIClient:
             try:
                 raw_key = decrypt_api_key(api_key_obj.encrypted_key)
                 selected_model = model or provider.default_model
-                messages = self._build_messages(message, chat_history)
+                messages = self._build_messages(message, chat_history, system_prompt=system_prompt)
 
                 result = self._call_provider(
                     provider=provider,
@@ -115,6 +116,7 @@ class AIClient:
         chat_history: list = None,
         provider_id: int = None,
         model: str = None,
+        system_prompt: str = None,
         ip_address: str = None,
     ) -> Generator[str, None, None]:
         """
@@ -137,7 +139,7 @@ class AIClient:
             try:
                 raw_key = decrypt_api_key(api_key_obj.encrypted_key)
                 selected_model = model or provider.default_model
-                messages = self._build_messages(message, chat_history)
+                messages = self._build_messages(message, chat_history, system_prompt=system_prompt)
 
                 full_response = ""
                 for chunk in self._stream_provider(provider, raw_key, messages, selected_model):
@@ -191,10 +193,11 @@ class AIClient:
     # Message building
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _build_messages(self, message: str, chat_history: list) -> list:
+    def _build_messages(self, message: str, chat_history: list, system_prompt: str = None) -> list:
         """Build the messages array with system prompt and history."""
         max_context = int(Setting.get("max_context_length", 10))
-        system_prompt = Setting.get("system_prompt", "You are a helpful AI assistant.")
+        if system_prompt is None:
+            system_prompt = Setting.get("system_prompt", "You are a helpful AI assistant.")
 
         messages = []
         if system_prompt:

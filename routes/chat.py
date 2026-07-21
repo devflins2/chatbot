@@ -46,6 +46,7 @@ def chat():
                 provider_id = None
 
     model = sanitize_string(data.get("model", ""), 200) or None
+    system_prompt = sanitize_string(data.get("system_prompt", ""), 4000) or None
     stream = data.get("stream", False)
     session_id = sanitize_string(data.get("session_id", "default"), 100)
     ip = get_client_ip()
@@ -61,6 +62,7 @@ def chat():
                     chat_history=chat_history,
                     provider_id=provider_id,
                     model=model,
+                    system_prompt=system_prompt,
                     ip_address=ip,
                 ):
                     yield chunk
@@ -80,6 +82,7 @@ def chat():
             chat_history=chat_history,
             provider_id=provider_id,
             model=model,
+            system_prompt=system_prompt,
             ip_address=ip,
         )
 

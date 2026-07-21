@@ -117,7 +117,8 @@ def _register_main_routes(app: Flask):
     @app.route("/chat-page")
     @login_required
     def chat_page():
-        return render_template("chat.html")
+        system_prompt = Setting.get("system_prompt", "You are a helpful AI assistant.")
+        return render_template("chat.html", system_prompt=system_prompt)
 
     @app.route("/logs-page")
     @login_required

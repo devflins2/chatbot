@@ -47,7 +47,7 @@
             <div class="mb-3">
                 <label class="form-label small">System Prompt</label>
                 <textarea class="form-control glass-input" id="chat-system" rows="4"
-                    placeholder="You are a helpful AI assistant...">You are a helpful AI assistant.</textarea>
+                    placeholder="You are a helpful AI assistant...">{{ system_prompt }}</textarea>
             </div>
 
             <div class="form-check form-switch mb-3">
@@ -220,6 +220,7 @@
 
     async function streamMessage(message, providerId, model, msgId) {
         try {
+            const systemPrompt = document.getElementById('chat-system').value.trim();
             const payload = {
                 message,
                 chat_history: chatHistory.slice(-20),
@@ -227,6 +228,7 @@
             };
             if (providerId) payload.provider_id = providerId;
             if (model) payload.model = model;
+            if (systemPrompt) payload.system_prompt = systemPrompt;
 
             streamController = new AbortController();
             const response = await fetch('/api/chat', {
@@ -280,6 +282,7 @@
 
     async function fetchMessage(message, providerId, model, msgId) {
         try {
+            const systemPrompt = document.getElementById('chat-system').value.trim();
             const payload = {
                 message,
                 chat_history: chatHistory.slice(-20),
@@ -287,6 +290,7 @@
             };
             if (providerId) payload.provider_id = providerId;
             if (model) payload.model = model;
+            if (systemPrompt) payload.system_prompt = systemPrompt;
 
             const data = await apiPost('/api/chat', payload);
             updateMessage(msgId, data.response);
