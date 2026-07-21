@@ -1,0 +1,436 @@
+{% extends "base.html" %}
+{% block title %}Chat Playground — AI Dashboard{% endblock %}
+{% block page_title %}Chat Playground{% endblock %}
+
+{% block content %}
+<div class="chat-layout">
+
+    <!-- Sidebar: Settings -->
+    <div class="chat-sidebar glass-card">
+        <div class="chat-sidebar-header">
+            <h6><i class="bi bi-sliders me-2"></i>Chat Settings</h6>
+        </div>
+
+        <div class="chat-sidebar-body">
+            <div class="mb-3">
+                <label class="form-label small">Provider</label>
+                <select class="form-select glass-input glass-select-sm" id="chat-provider">
+                    <option value="">Auto Select</option>
+                </select>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label small">Model</label>
+                <select class="form-select glass-input glass-select-sm" id="chat-model">
+                    <option value="">Provider Default</option>
+                </select>
+                <input type="text" class="form-control glass-input mt-1" id="chat-model-custom"
+                    placeholder="Or type custom model..." style="display:none">
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label small">
+                    Temperature: <span id="temp-val">0.7</span>
+                </label>
+                <input type="range" class="form-range" id="chat-temp" min="0" max="2" step="0.1" value="0.7"
+                    oninput="document.getElementById('temp-val').textContent = this.value">
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label small">
+                    Max Tokens: <span id="tokens-val">2048</span>
+                </label>
+                <input type="range" class="form-range" id="chat-tokens" min="256" max="8192" step="256" value="2048"
+                    oninput="document.getElementById('tokens-val').textContent = this.value">
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label small">System Prompt</label>
+                <textarea class="form-control glass-input" id="chat-system" rows="4"
+                    placeholder="You are a helpful AI assistant...">You are a helpful AI assistant.</textarea>
+            </div>
+
+            <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" id="chat-stream" checked>
+                <label class="form-check-label small">Streaming Mode</label>
+            </div>
+
+            <button class="btn btn-sm btn-outline-danger w-100" onclick="clearChat()">
+                <i class="bi bi-trash me-1"></i>Clear Chat
+            </button>
+        </div>
+    </div>
+
+    <!-- Main chat area -->
+    <div class="chat-main">
+
+        <!-- Messages -->
+        <div class="chat-messages" id="chat-messages">
+            <div class="chat-welcome">
+                <div class="chat-welcome-icon">🤖</div>
+                <h4>AI Chat Playground</h4>
+                <p class="text-muted">
+                    Send a message to start chatting. Select a provider on the left
+                    or let the system auto-select one.
+                </p>
+            </div>
+        </div>
+
+        <!-- Input area -->
+        <div class="chat-input-area glass-card">
+            <!-- Info bar -->
+            <div class="chat-info-bar" id="chat-info-bar" style="display:none">
+                <span id="chat-info-text" class="text-muted small"></span>
+            </div>
+
+            <div class="chat-input-row">
+                <textarea class="form-control glass-input chat-textarea" id="chat-input"
+                    placeholder="Type your message... (Shift+Enter for new line)" rows="1" maxlength="8000"
+                    onkeydown="handleChatKeydown(event)" oninput="autoResize(this)"></textarea>
+
+                <div class="chat-actions">
+                    <button class="btn btn-outline-secondary" id="regen-btn" onclick="regenerate()" title="Regenerate"
+                        style="display:none">
+                        <i class="bi bi-arrow-clockwise"></i>
+                    </button>
+                    <button class="btn btn-danger" id="stop-btn" onclick="stopStream()" title="Stop"
+                        style="display:none">
+                        <i class="bi bi-stop-fill"></i>
+                    </button>
+                    <button class="btn btn-primary" id="send-btn" onclick="sendMessage()">
+                        <i class="bi bi-send-fill"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="char-counter text-end">
+                <small class="text-muted" id="char-count">0 / 8000</small>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    let chatHistory = [];
+    let streamController = null;
+    let lastUserMessage = '';
+    let providers = [];
+
+    // Configure marked
+    marked.setOptions({ breaks: true, gfm: true });
+
+    document.addEventListener('DOMContentLoaded', async () => {
+        await loadChatProviders();
+        document.getElementById('chat-input').focus();
+    });
+
+    async function loadChatProviders() {
+        try {
+            const data = await apiGet('/api/providers');
+            providers = data.providers.filter(p => p.is_enabled && p.active_key_count > 0);
+            const sel = document.getElementById('chat-provider');
+            providers.forEach(p => {
+                sel.innerHTML += `<option value="${p.id}">${p.display_name}</option>`;
+            });
+            sel.addEventListener('change', updateModelList);
+        } catch (e) { }
+    }
+
+    function updateModelList() {
+        const providerId = document.getElementById('chat-provider').value;
+        const modelSel = document.getElementById('chat-model');
+        const customInput = document.getElementById('chat-model-custom');
+
+        modelSel.innerHTML = '<option value="">Provider Default</option>';
+
+        if (!providerId) return;
+
+        const provider = providers.find(p => p.id === providerId);
+        if (!provider) return;
+
+        if (provider.available_models && provider.available_models.length) {
+            provider.available_models.forEach(m => {
+                modelSel.innerHTML += `<option value="${m}">${m}</option>`;
+            });
+            modelSel.innerHTML += '<option value="custom">Custom model...</option>';
+        }
+
+        modelSel.addEventListener('change', function () {
+            customInput.style.display = this.value === 'custom' ? 'block' : 'none';
+        });
+    }
+
+    // Auto-resize textarea
+    function autoResize(el) {
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+        document.getElementById('char-count').textContent = `${el.value.length} / 8000`;
+    }
+
+    function handleChatKeydown(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    }
+
+    async function sendMessage() {
+        const input = document.getElementById('chat-input');
+        const message = input.value.trim();
+        if (!message) return;
+
+        lastUserMessage = message;
+        input.value = '';
+        input.style.height = 'auto';
+        document.getElementById('char-count').textContent = '0 / 8000';
+
+        // Hide welcome screen
+        const welcome = document.querySelector('.chat-welcome');
+        if (welcome) welcome.style.display = 'none';
+
+        // Add user message to UI
+        appendMessage('user', message);
+        chatHistory.push({ role: 'user', content: message });
+
+        // Get settings
+        const providerId = document.getElementById('chat-provider').value;
+        const modelSel = document.getElementById('chat-model').value;
+        const customModel = document.getElementById('chat-model-custom').value.trim();
+        const model = modelSel === 'custom' ? customModel : modelSel;
+        const stream = document.getElementById('chat-stream').checked;
+
+        // Show sending state
+        document.getElementById('send-btn').style.display = 'none';
+        document.getElementById('stop-btn').style.display = 'flex';
+        document.getElementById('regen-btn').style.display = 'none';
+
+        const msgId = 'msg-' + Date.now();
+        appendMessage('assistant', '', msgId);
+
+        if (stream) {
+            await streamMessage(message, providerId, model, msgId);
+        } else {
+            await fetchMessage(message, providerId, model, msgId);
+        }
+
+        document.getElementById('send-btn').style.display = 'flex';
+        document.getElementById('stop-btn').style.display = 'none';
+        document.getElementById('regen-btn').style.display = 'flex';
+    }
+
+    async function streamMessage(message, providerId, model, msgId) {
+        try {
+            const payload = {
+                message,
+                chat_history: chatHistory.slice(-20),
+                stream: true,
+            };
+            if (providerId) payload.provider_id = providerId;
+            if (model) payload.model = model;
+
+            streamController = new AbortController();
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                signal: streamController.signal,
+            });
+
+            if (!response.ok) {
+                const err = await response.json();
+                updateMessage(msgId, '', err.error || 'Request failed', true);
+                return;
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let fullText = '';
+            let providerInfo = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split('\n');
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        if (data.chunk) {
+                            fullText += data.chunk;
+                            updateMessage(msgId, fullText);
+                        } else if (data.done) {
+                            providerInfo = `${data.provider} · ${data.model}`;
+                            chatHistory.push({ role: 'assistant', content: fullText });
+                            showInfoBar(providerInfo);
+                        } else if (data.error) {
+                            updateMessage(msgId, '', data.error, true);
+                        }
+                    } catch (_) { }
+                }
+            }
+        } catch (e) {
+            if (e.name !== 'AbortError') {
+                updateMessage(msgId, '', 'Stream interrupted: ' + e.message, true);
+            }
+        }
+    }
+
+    async function fetchMessage(message, providerId, model, msgId) {
+        try {
+            const payload = {
+                message,
+                chat_history: chatHistory.slice(-20),
+                stream: false,
+            };
+            if (providerId) payload.provider_id = providerId;
+            if (model) payload.model = model;
+
+            const data = await apiPost('/api/chat', payload);
+            updateMessage(msgId, data.response);
+            chatHistory.push({ role: 'assistant', content: data.response });
+
+            const info = `${data.provider_display || data.provider} · ${data.model}`;
+            if (data.total_tokens) showInfoBar(`${info} · ${data.total_tokens} tokens`);
+            else showInfoBar(info);
+        } catch (e) {
+            updateMessage(msgId, '', e.message, true);
+        }
+    }
+
+    function appendMessage(role, content, id = null) {
+        const container = document.getElementById('chat-messages');
+        const div = document.createElement('div');
+        div.className = `chat-message chat-message-${role}`;
+        if (id) div.id = id;
+
+        const avatar = role === 'user'
+            ? `<div class="msg-avatar user-avatar-sm">U</div>`
+            : `<div class="msg-avatar ai-avatar-sm">🤖</div>`;
+
+        div.innerHTML = `
+        ${avatar}
+        <div class="msg-bubble msg-bubble-${role}">
+            <div class="msg-content">${renderContent(content)}</div>
+            ${role === 'assistant' ? `
+            <div class="msg-actions">
+                <button class="msg-action-btn" onclick="copyMessage(this)" title="Copy">
+                    <i class="bi bi-clipboard"></i>
+                </button>
+            </div>` : ''}
+        </div>`;
+
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+        if (id && !content) {
+            div.querySelector('.msg-content').innerHTML = '<span class="typing-cursor">▋</span>';
+        }
+    }
+
+    function updateMessage(id, content, error = null, isError = false) {
+        const div = document.getElementById(id);
+        if (!div) return;
+        const contentDiv = div.querySelector('.msg-content');
+
+        if (isError || error) {
+            contentDiv.innerHTML = `<div class="chat-error"><i class="bi bi-exclamation-triangle me-2"></i>${escHtml(error || content)}</div>`;
+            return;
+        }
+
+        if (content) {
+            contentDiv.innerHTML = renderContent(content);
+            // Re-highlight code blocks
+            div.querySelectorAll('pre code').forEach(block => {
+                hljs.highlightElement(block);
+                addCopyToCode(block.parentElement);
+            });
+        }
+        document.getElementById('chat-messages').scrollTop =
+            document.getElementById('chat-messages').scrollHeight;
+    }
+
+    function renderContent(text) {
+        if (!text) return '';
+        return marked.parse(text);
+    }
+
+    function addCopyToCode(pre) {
+        if (pre.querySelector('.code-copy-btn')) return;
+        const btn = document.createElement('button');
+        btn.className = 'code-copy-btn';
+        btn.innerHTML = '<i class="bi bi-clipboard"></i>';
+        btn.onclick = () => {
+            const code = pre.querySelector('code').textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                btn.innerHTML = '<i class="bi bi-check"></i>';
+                setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 2000);
+            });
+        };
+        pre.style.position = 'relative';
+        pre.appendChild(btn);
+    }
+
+    function copyMessage(btn) {
+        const bubble = btn.closest('.msg-bubble');
+        const content = bubble.querySelector('.msg-content').textContent;
+        navigator.clipboard.writeText(content).then(() => {
+            btn.innerHTML = '<i class="bi bi-check"></i>';
+            setTimeout(() => { btn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 2000);
+        });
+    }
+
+    function stopStream() {
+        if (streamController) {
+            streamController.abort();
+            streamController = null;
+        }
+        document.getElementById('send-btn').style.display = 'flex';
+        document.getElementById('stop-btn').style.display = 'none';
+        document.getElementById('regen-btn').style.display = 'flex';
+    }
+
+    function regenerate() {
+        if (!lastUserMessage) return;
+        // Remove last assistant message from history
+        if (chatHistory.length >= 2) {
+            chatHistory.pop(); // remove assistant
+            chatHistory.pop(); // remove user
+        }
+        // Remove last two messages from UI
+        const msgs = document.querySelectorAll('.chat-message');
+        if (msgs.length >= 2) {
+            msgs[msgs.length - 1].remove();
+            msgs[msgs.length - 2].remove();
+        }
+        document.getElementById('chat-input').value = lastUserMessage;
+        sendMessage();
+    }
+
+    function clearChat() {
+        if (!confirm('Clear all chat history?')) return;
+        chatHistory = [];
+        lastUserMessage = '';
+        const container = document.getElementById('chat-messages');
+        container.innerHTML = `
+        <div class="chat-welcome">
+            <div class="chat-welcome-icon">🤖</div>
+            <h4>AI Chat Playground</h4>
+            <p class="text-muted">Send a message to start chatting.</p>
+        </div>`;
+        hideInfoBar();
+        document.getElementById('regen-btn').style.display = 'none';
+    }
+
+    function showInfoBar(text) {
+        const bar = document.getElementById('chat-info-bar');
+        document.getElementById('chat-info-text').textContent = text;
+        bar.style.display = 'block';
+    }
+
+    function hideInfoBar() {
+        document.getElementById('chat-info-bar').style.display = 'none';
+    }
+</script>
+{% endblock %}

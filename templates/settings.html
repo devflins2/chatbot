@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Settings — AI Dashboard{% endblock %}
+{% block page_title %}Settings{% endblock %}
+
+{% block content %}
+<div class="page-wrapper">
+
+    <div class="page-header mb-4">
+        <div>
+            <h3 class="page-heading">Settings</h3>
+            <p class="page-sub">Configure global AI and application settings</p>
+        </div>
+        <button class="btn btn-primary" onclick="saveSettings()">
+            <i class="bi bi-check-lg me-2"></i>Save All Settings
+        </button>
+    </div>
+
+    <div class="row g-4">
+
+        <!-- AI Parameters -->
+        <div class="col-lg-6">
+            <div class="glass-card h-100">
+                <div class="card-header-custom">
+                    <h5 class="card-title-custom">
+                        <i class="bi bi-cpu me-2 text-primary"></i>AI Parameters
+                    </h5>
+                </div>
+                <div class="card-body-custom">
+
+                    <div class="mb-4">
+                        <label class="form-label">
+                            Temperature
+                            <span class="text-muted ms-1" id="temp-display">0.7</span>
+                        </label>
+                        <input type="range" class="form-range" id="s-temperature" min="0" max="2" step="0.1" value="0.7"
+                            oninput="document.getElementById('temp-display').textContent = this.value">
+                        <small class="text-muted">Controls randomness. 0 = deterministic, 2 = very random.</small>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">
+                            Top P
+                            <span class="text-muted ms-1" id="topp-display">1.0</span>
+                        </label>
+                        <input type="range" class="form-range" id="s-top_p" min="0" max="1" step="0.05" value="1.0"
+                            oninput="document.getElementById('topp-display').textContent = this.value">
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">Max Tokens</label>
+                        <input type="number" class="form-control glass-input" id="s-max_tokens" value="2048" min="256"
+                            max="32768" step="256">
+                        <small class="text-muted">Maximum tokens in the AI response.</small>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">Max Context Length (turns)</label>
+                        <input type="number" class="form-control glass-input" id="s-max_context_length" value="10"
+                            min="1" max="100">
+                        <small class="text-muted">Number of conversation turns to keep in context.</small>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">API Timeout (seconds)</label>
+                        <input type="number" class="form-control glass-input" id="s-api_timeout" value="30" min="5"
+                            max="300">
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- Behavior -->
+        <div class="col-lg-6">
+            <div class="glass-card h-100">
+                <div class="card-header-custom">
+                    <h5 class="card-title-custom">
+                        <i class="bi bi-gear me-2 text-warning"></i>Behavior
+                    </h5>
+                </div>
+                <div class="card-body-custom">
+
+                    <div class="mb-4">
+                        <label class="form-label">System Prompt</label>
+                        <textarea class="form-control glass-input" id="s-system_prompt" rows="6"
+                            placeholder="You are a helpful AI assistant."></textarea>
+                        <small class="text-muted">Default system prompt prepended to all conversations.</small>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">Provider Selection Strategy</label>
+                        <select class="form-select glass-input" id="s-selection_strategy">
+                            <option value="priority">Priority (use lowest priority number first)</option>
+                            <option value="random">Random (randomly select from enabled providers)</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-4">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="s-streaming_enabled" checked>
+                            <label class="form-check-label" for="s-streaming_enabled">
+                                Enable Response Streaming
+                            </label>
+                        </div>
+                        <small class="text-muted">Stream tokens as they're generated for faster perceived
+                            response.</small>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">UI Theme</label>
+                        <select class="form-select glass-input" id="s-theme">
+                            <option value="dark">Dark (default)</option>
+                            <option value="light">Light</option>
+                        </select>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', loadSettings);
+
+    async function loadSettings() {
+        try {
+            const data = await apiGet('/api/settings-data');
+            for (const [key, info] of Object.entries(data)) {
+                const el = document.getElementById(`s-${key}`);
+                if (!el) continue;
+
+                if (el.type === 'checkbox') {
+                    el.checked = info.value === 'true';
+                } else if (el.type === 'range') {
+                    el.value = parseFloat(info.value);
+                    // Update display span
+                    const display = document.getElementById(
+                        key === 'temperature' ? 'temp-display' : 'topp-display'
+                    );
+                    if (display) display.textContent = info.value;
+                } else {
+                    el.value = info.value;
+                }
+            }
+        } catch (e) {
+            showToast('Failed to load settings', 'danger');
+        }
+    }
+
+    async function saveSettings() {
+        const settings = {};
+        const keys = [
+            'temperature', 'top_p', 'max_tokens', 'max_context_length',
+            'api_timeout', 'system_prompt', 'selection_strategy',
+            'streaming_enabled', 'theme',
+        ];
+
+        for (const key of keys) {
+            const el = document.getElementById(`s-${key}`);
+            if (!el) continue;
+            if (el.type === 'checkbox') {
+                settings[key] = el.checked ? 'true' : 'false';
+            } else {
+                settings[key] = el.value;
+            }
+        }
+
+        try {
+            const result = await apiPost('/api/settings-data', settings);
+            showToast(result.message, 'success');
+        } catch (e) {
+            showToast(e.message || 'Failed to save settings', 'danger');
+        }
+    }
+</script>
+{% endblock %}

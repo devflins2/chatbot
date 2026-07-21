@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% block title %}Analytics — AI Dashboard{% endblock %}
+{% block page_title %}Analytics{% endblock %}
+
+{% block content %}
+<div class="page-wrapper">
+
+    <div class="page-header mb-4">
+        <div>
+            <h3 class="page-heading">Analytics</h3>
+            <p class="page-sub">Deep insights into your AI API usage</p>
+        </div>
+        <select class="glass-select" id="analytics-days" onchange="refreshAll()">
+            <option value="7">Last 7 days</option>
+            <option value="14">Last 14 days</option>
+            <option value="30" selected>Last 30 days</option>
+            <option value="90">Last 90 days</option>
+        </select>
+    </div>
+
+    <!-- Summary stats -->
+    <div class="row g-3 mb-4" id="analytics-stats"></div>
+
+    <!-- Charts -->
+    <div class="row g-3 mb-4">
+        <div class="col-12">
+            <div class="glass-card">
+                <div class="card-header-custom">
+                    <h5 class="card-title-custom">
+                        <i class="bi bi-graph-up me-2 text-primary"></i>Daily Request Volume
+                    </h5>
+                </div>
+                <div class="card-body-custom">
+                    <canvas id="volumeChart" height="120"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-lg-6">
+            <div class="glass-card h-100">
+                <div class="card-header-custom">
+                    <h5 class="card-title-custom">
+                        <i class="bi bi-pie-chart me-2 text-info"></i>Provider Usage Distribution
+                    </h5>
+                </div>
+                <div class="card-body-custom">
+                    <canvas id="providerPieChart" height="250"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="glass-card h-100">
+                <div class="card-header-custom">
+                    <h5 class="card-title-custom">
+                        <i class="bi bi-speedometer me-2 text-warning"></i>Success Rate by Provider
+                    </h5>
+                </div>
+                <div class="card-body-custom">
+                    <canvas id="successRateChart" height="250"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-12">
+            <div class="glass-card">
+                <div class="card-header-custom">
+                    <h5 class="card-title-custom">
+                        <i class="bi bi-lightning me-2 text-success"></i>Average Response Time by Provider
+                    </h5>
+                </div>
+                <div class="card-body-custom">
+                    <canvas id="latencyChart" height="120"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    let charts = {};
+
+    document.addEventListener('DOMContentLoaded', refreshAll);
+
+    async function refreshAll() {
+        const days = document.getElementById('analytics-days').value;
+        await Promise.all([
+            loadAnalyticsStats(),
+            loadVolumeChart(days),
+            loadProviderCharts(),
+        ]);
+    }
+
+    async function loadAnalyticsStats() {
+        const data = await apiGet('/api/stats');
+        document.getElementById('analytics-stats').innerHTML = `
+        ${aStatCard('Total Requests', data.total_requests.toLocaleString(), 'bi-send', 'primary')}
+        ${aStatCard('Success Rate', data.success_rate + '%', 'bi-graph-up', 'success')}
+        ${aStatCard('Failed Requests', data.failed_requests.toLocaleString(), 'bi-x-circle', 'danger')}
+        ${aStatCard('Avg Latency', (data.avg_latency_ms || 0) + 'ms', 'bi-lightning', 'warning')}
+        ${aStatCard('Active Providers', data.enabled_providers, 'bi-grid', 'info')}
+        ${aStatCard('Active Keys', data.active_keys, 'bi-key', 'primary')}
+    `;
+    }
+
+    function aStatCard(label, value, icon, color) {
+        return `
+    <div class="col-6 col-md-4 col-lg-2">
+        <div class="stat-card glass-card text-center">
+            <div class="stat-icon stat-icon-${color} mx-auto mb-2">
+                <i class="bi ${icon}"></i>
+            </div>
+            <div class="stat-value">${value}</div>
+            <div class="stat-label">${label}</div>
+        </div>
+    </div>`;
+    }
+
+    async function loadVolumeChart(days) {
+        const data = await apiGet(`/api/stats/daily?days=${days}`);
+        const labels = data.daily.map(d => d.date);
+        const ctx = document.getElementById('volumeChart').getContext('2d');
+        if (charts.volume) charts.volume.destroy();
+
+        charts.volume = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'Success',
+                        data: data.daily.map(d => d.success),
+                        backgroundColor: 'rgba(34,197,94,0.7)',
+                        borderRadius: 4,
+                    },
+                    {
+                        label: 'Failed',
+                        data: data.daily.map(d => d.failed),
+                        backgroundColor: 'rgba(239,68,68,0.7)',
+                        borderRadius: 4,
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { labels: { color: '#94a3b8' } },
+                    tooltip: { mode: 'index' },
+                },
+                scales: {
+                    x: { stacked: true, ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' } },
+                    y: { stacked: true, ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' }, beginAtZero: true },
+                },
+            },
+        });
+    }
+
+    async function loadProviderCharts() {
+        const data = await apiGet('/api/stats/providers');
+        const p = data.providers;
+        const colors = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#8b5cf6', '#ec4899', '#14b8a6'];
+
+        // Doughnut chart
+        const ctx1 = document.getElementById('providerPieChart').getContext('2d');
+        if (charts.pie) charts.pie.destroy();
+        const used = p.filter(x => x.total > 0);
+        if (used.length) {
+            charts.pie = new Chart(ctx1, {
+                type: 'doughnut',
+                data: {
+                    labels: used.map(x => x.name),
+                    datasets: [{ data: used.map(x => x.total), backgroundColor: colors, borderWidth: 0 }],
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { position: 'right', labels: { color: '#94a3b8' } } },
+                },
+            });
+        }
+
+        // Success rate bar
+        const ctx2 = document.getElementById('successRateChart').getContext('2d');
+        if (charts.success) charts.success.destroy();
+        charts.success = new Chart(ctx2, {
+            type: 'bar',
+            data: {
+                labels: p.map(x => x.name),
+                datasets: [{
+                    label: 'Success Rate %',
+                    data: p.map(x => x.total > 0 ? Math.round(x.success / x.total * 100) : 0),
+                    backgroundColor: colors,
+                    borderRadius: 6,
+                }],
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' } },
+                    y: {
+                        ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' },
+                        beginAtZero: true, max: 100
+                    },
+                },
+            },
+        });
+
+        // Latency bar
+        const ctx3 = document.getElementById('latencyChart').getContext('2d');
+        if (charts.latency) charts.latency.destroy();
+        charts.latency = new Chart(ctx3, {
+            type: 'bar',
+            data: {
+                labels: p.map(x => x.name),
+                datasets: [{
+                    label: 'Avg Latency (ms)',
+                    data: p.map(x => x.avg_latency),
+                    backgroundColor: 'rgba(245,158,11,0.7)',
+                    borderRadius: 6,
+                }],
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' } },
+                    y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' }, beginAtZero: true },
+                },
+            },
+        });
+    }
+</script>
+{% endblock %}

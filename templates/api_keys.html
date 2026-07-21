@@ -1,0 +1,379 @@
+{% extends "base.html" %}
+{% block title %}API Keys — AI Dashboard{% endblock %}
+{% block page_title %}API Keys{% endblock %}
+
+{% block content %}
+<div class="page-wrapper">
+
+    <!-- Header -->
+    <div class="page-header mb-4">
+        <div>
+            <h3 class="page-heading">API Keys</h3>
+            <p class="page-sub">Securely manage your provider API keys. Keys are encrypted and never exposed.</p>
+        </div>
+        <button class="btn btn-primary" onclick="openAddKey()">
+            <i class="bi bi-plus-lg me-2"></i>Add Key
+        </button>
+    </div>
+
+    <!-- Filters -->
+    <div class="filter-bar glass-card mb-4">
+        <div class="filter-group">
+            <div class="search-box">
+                <i class="bi bi-search search-icon"></i>
+                <input type="text" class="form-control glass-input search-input" id="key-search"
+                    placeholder="Search keys..." oninput="debounceSearch()">
+            </div>
+        </div>
+        <div class="filter-group">
+            <select class="form-select glass-input" id="provider-filter" onchange="loadKeys()">
+                <option value="">All Providers</option>
+            </select>
+            <select class="form-select glass-input" id="status-filter" onchange="loadKeys()">
+                <option value="">All Status</option>
+                <option value="active">Active</option>
+                <option value="failed">Failed</option>
+                <option value="disabled">Disabled</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Keys table -->
+    <div class="glass-card">
+        <div class="table-responsive">
+            <table class="table table-dark table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Provider</th>
+                        <th>Key Preview</th>
+                        <th>Status</th>
+                        <th>Requests</th>
+                        <th>Last Used</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="keys-tbody">
+                    <tr>
+                        <td colspan="8" class="text-center py-4">
+                            <div class="spinner-border text-primary"></div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination-bar" id="keys-pagination"></div>
+    </div>
+
+</div>
+
+<!-- Add/Edit Key Modal -->
+<div class="modal fade" id="keyModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content glass-modal">
+            <div class="modal-header">
+                <h5 class="modal-title" id="keyModalTitle">Add API Key</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="security-notice mb-3">
+                    <i class="bi bi-shield-lock-fill me-2 text-success"></i>
+                    <small>Keys are encrypted with AES-256 before storage and never returned to the browser.</small>
+                </div>
+                <form id="keyForm" novalidate>
+                    <input type="hidden" id="editKeyId">
+                    <div class="mb-3">
+                        <label class="form-label">Provider <span class="text-danger">*</span></label>
+                        <select class="form-select glass-input" id="keyProvider" required>
+                            <option value="">Select provider...</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">API Key <span class="text-danger" id="key-required">*</span></label>
+                        <div class="input-password-wrapper">
+                            <input type="password" class="form-control glass-input" id="keyValue" placeholder="sk-..."
+                                autocomplete="off">
+                            <button type="button" class="password-toggle" onclick="toggleKeyVisibility()">
+                                <i class="bi bi-eye" id="key-eye"></i>
+                            </button>
+                        </div>
+                        <div class="form-text" id="key-hint">Leave blank to keep existing key when editing.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Name (optional)</label>
+                        <input type="text" class="form-control glass-input" id="keyName"
+                            placeholder="e.g., Production Key, Free Tier...">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveKey()">
+                    <i class="bi bi-lock me-1"></i>Save Key
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Test Result Modal -->
+<div class="modal fade" id="testModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content glass-modal">
+            <div class="modal-header">
+                <h5 class="modal-title">Key Test Result</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body text-center" id="testResult">
+                <div class="spinner-border text-primary"></div>
+                <p class="mt-2">Testing key...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentPage = 1;
+    let searchTimeout = null;
+    let providers = [];
+
+    document.addEventListener('DOMContentLoaded', async () => {
+        await loadProviders();
+        // Apply URL param filter
+        const params = new URLSearchParams(location.search);
+        if (params.get('provider')) {
+            document.getElementById('provider-filter').value = params.get('provider');
+        }
+        loadKeys();
+    });
+
+    async function loadProviders() {
+        try {
+            const data = await apiGet('/api/providers');
+            providers = data.providers;
+            const sel1 = document.getElementById('provider-filter');
+            const sel2 = document.getElementById('keyProvider');
+            providers.forEach(p => {
+                sel1.innerHTML += `<option value="${p.id}">${p.display_name}</option>`;
+                sel2.innerHTML += `<option value="${p.id}">${p.display_name}</option>`;
+            });
+        } catch (e) { }
+    }
+
+    async function loadKeys() {
+        const page = currentPage;
+        const search = document.getElementById('key-search').value;
+        const provider = document.getElementById('provider-filter').value;
+        const status = document.getElementById('status-filter').value;
+
+        let url = `/api/apikeys?page=${page}&per_page=20`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+        if (provider) url += `&provider_id=${provider}`;
+        if (status) url += `&status=${status}`;
+
+        try {
+            const data = await apiGet(url);
+            renderKeys(data.keys);
+            renderPagination(data.page, data.pages, data.total);
+        } catch (e) {
+            document.getElementById('keys-tbody').innerHTML =
+                '<tr><td colspan="8" class="text-center text-danger">Failed to load keys</td></tr>';
+        }
+    }
+
+    function renderKeys(keys) {
+        const tbody = document.getElementById('keys-tbody');
+        if (!keys.length) {
+            tbody.innerHTML = `
+            <tr><td colspan="8" class="text-center py-5">
+                <div class="empty-state">
+                    <i class="bi bi-key display-4 text-muted"></i>
+                    <p class="mt-2 text-muted">No API keys found</p>
+                    <button class="btn btn-sm btn-primary" onclick="openAddKey()">Add Key</button>
+                </div>
+            </td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = keys.map(k => {
+            const statusBadge = k.is_failed
+                ? '<span class="status-badge status-failed"><i class="bi bi-x-circle"></i> Failed</span>'
+                : k.is_active
+                    ? '<span class="status-badge status-success"><i class="bi bi-check-circle"></i> Active</span>'
+                    : '<span class="status-badge status-disabled"><i class="bi bi-pause-circle"></i> Disabled</span>';
+
+            return `
+        <tr>
+            <td><strong>${escHtml(k.name)}</strong></td>
+            <td><span class="provider-badge">${escHtml(k.provider_name)}</span></td>
+            <td><code class="key-preview">${escHtml(k.key_preview)}</code></td>
+            <td>${statusBadge}</td>
+            <td>
+                <small class="text-muted">
+                    ✅ ${k.successful_requests} / ❌ ${k.failed_requests}
+                </small>
+            </td>
+            <td class="text-muted small">${k.last_used ? timeAgo(k.last_used) : 'Never'}</td>
+            <td class="text-muted small">${k.created_at ? new Date(k.created_at).toLocaleDateString() : ''}</td>
+            <td>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-primary" onclick="testKey('${k.id}')" title="Test Key">
+                        <i class="bi bi-lightning"></i>
+                    </button>
+                    <button class="btn btn-outline-secondary" onclick="toggleKey('${k.id}')" title="${k.is_active ? 'Disable' : 'Enable'}">
+                        <i class="bi bi-${k.is_active ? 'pause' : 'play'}"></i>
+                    </button>
+                    <button class="btn btn-outline-info" onclick="openEditKey('${k.id}')" title="Edit">
+                        <i class="bi bi-pencil"></i>
+                    </button>
+                    <button class="btn btn-outline-danger" onclick="deleteKey('${k.id}', '${escHtml(k.name)}')" title="Delete">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            </td>
+        </tr>`;
+        }).join('');
+    }
+
+    function renderPagination(page, pages, total) {
+        if (pages <= 1) { document.getElementById('keys-pagination').innerHTML = ''; return; }
+        const el = document.getElementById('keys-pagination');
+        let html = `<div class="d-flex align-items-center gap-2 p-3">
+        <small class="text-muted me-auto">Total: ${total} keys</small>`;
+        if (page > 1) html += `<button class="btn btn-sm btn-outline-secondary" onclick="goPage(${page - 1})">
+        <i class="bi bi-chevron-left"></i></button>`;
+        html += `<span class="text-muted small">Page ${page} of ${pages}</span>`;
+        if (page < pages) html += `<button class="btn btn-sm btn-outline-secondary" onclick="goPage(${page + 1})">
+        <i class="bi bi-chevron-right"></i></button>`;
+        html += '</div>';
+        el.innerHTML = html;
+    }
+
+    function goPage(p) { currentPage = p; loadKeys(); }
+
+    function debounceSearch() {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => { currentPage = 1; loadKeys(); }, 400);
+    }
+
+    function openAddKey() {
+        document.getElementById('editKeyId').value = '';
+        document.getElementById('keyModalTitle').textContent = 'Add API Key';
+        document.getElementById('keyForm').reset();
+        document.getElementById('key-required').style.display = 'inline';
+        document.getElementById('key-hint').style.display = 'none';
+        new bootstrap.Modal('#keyModal').show();
+    }
+
+    async function openEditKey(id) {
+        try {
+            const data = await apiGet('/api/apikeys');
+            const key = data.keys.find(k => k.id === id);
+            if (!key) { showToast('Key not found', 'danger'); return; }
+
+            document.getElementById('editKeyId').value = id;
+            document.getElementById('keyModalTitle').textContent = 'Edit API Key';
+            document.getElementById('keyProvider').value = key.provider_id;
+            document.getElementById('keyName').value = key.name;
+            document.getElementById('keyValue').value = '';
+            document.getElementById('keyValue').placeholder = 'Leave blank to keep current key';
+            document.getElementById('key-required').style.display = 'none';
+            document.getElementById('key-hint').style.display = 'block';
+
+            new bootstrap.Modal('#keyModal').show();
+        } catch (e) {
+            showToast('Failed to load key details', 'danger');
+        }
+    }
+
+    async function saveKey() {
+        const id = document.getElementById('editKeyId').value;
+        const providerId = document.getElementById('keyProvider').value;
+        const keyValue = document.getElementById('keyValue').value.trim();
+        const name = document.getElementById('keyName').value.trim();
+
+        if (!providerId) { showToast('Please select a provider', 'danger'); return; }
+        if (!id && !keyValue) { showToast('API key value is required', 'danger'); return; }
+
+        try {
+            let result;
+            if (id) {
+                const payload = { name };
+                if (keyValue) payload.new_api_key = keyValue;
+                result = await apiPut(`/api/apikeys/${id}`, payload);
+            } else {
+                result = await apiPost('/api/apikeys', {
+                    provider_id: providerId,
+                    api_key: keyValue,
+                    name,
+                });
+            }
+            showToast(result.message, 'success');
+            bootstrap.Modal.getInstance('#keyModal').hide();
+            currentPage = 1;
+            loadKeys();
+        } catch (e) {
+            showToast(e.message || 'Failed to save key', 'danger');
+        }
+    }
+
+    async function testKey(id) {
+        const modal = new bootstrap.Modal('#testModal');
+        document.getElementById('testResult').innerHTML = `
+        <div class="spinner-border text-primary"></div>
+        <p class="mt-2 text-muted">Sending test request...</p>`;
+        modal.show();
+
+        try {
+            const data = await apiPost(`/api/apikeys/${id}/test`, {});
+            const icon = data.success ? '✅' : '❌';
+            const cls = data.success ? 'text-success' : 'text-danger';
+            document.getElementById('testResult').innerHTML = `
+            <div class="display-4 mb-2">${icon}</div>
+            <h5 class="${cls}">${data.success ? 'Key is Working!' : 'Key Failed'}</h5>
+            <p class="text-muted small">${escHtml(data.message)}</p>
+            ${data.latency_ms ? `<small class="text-muted">Latency: ${data.latency_ms}ms</small>` : ''}`;
+            loadKeys(); // Refresh to update status
+        } catch (e) {
+            document.getElementById('testResult').innerHTML = `
+            <div class="display-4 mb-2">❌</div>
+            <h5 class="text-danger">Test Failed</h5>
+            <p class="text-muted small">${escHtml(e.message)}</p>`;
+        }
+    }
+
+    async function toggleKey(id) {
+        try {
+            const data = await apiPost(`/api/apikeys/${id}/toggle`, {});
+            showToast(data.message, 'success');
+            loadKeys();
+        } catch (e) {
+            showToast('Failed to toggle key', 'danger');
+        }
+    }
+
+    async function deleteKey(id, name) {
+        if (!confirm(`Delete key "${name}"? This cannot be undone.`)) return;
+        try {
+            const data = await apiDelete(`/api/apikeys/${id}`);
+            showToast(data.message, 'success');
+            loadKeys();
+        } catch (e) {
+            showToast('Failed to delete key', 'danger');
+        }
+    }
+
+    function toggleKeyVisibility() {
+        const input = document.getElementById('keyValue');
+        const icon = document.getElementById('key-eye');
+        if (input.type === 'password') {
+            input.type = 'text'; icon.className = 'bi bi-eye-slash';
+        } else {
+            input.type = 'password'; icon.className = 'bi bi-eye';
+        }
+    }
+</script>
+{% endblock %}

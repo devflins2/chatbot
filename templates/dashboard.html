@@ -1,0 +1,332 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — AI Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="dashboard-wrapper">
+
+    <!-- ── Welcome Banner ────────────────────────────────────────────────── -->
+    <div class="welcome-banner glass-card mb-4">
+        <div class="welcome-content">
+            <h2 class="welcome-title">
+                Welcome back, <span class="text-gradient">{{ current_user.username }}</span> 👋
+            </h2>
+            <p class="welcome-subtitle">
+                Your AI infrastructure at a glance. All systems operational.
+            </p>
+        </div>
+        <div class="welcome-actions">
+            <a href="/chat-page" class="btn btn-primary">
+                <i class="bi bi-chat-dots me-2"></i>Open Chat
+            </a>
+            <a href="/api-keys-page" class="btn btn-outline-primary">
+                <i class="bi bi-plus-lg me-2"></i>Add API Key
+            </a>
+        </div>
+    </div>
+
+    <!-- ── Stats Cards ───────────────────────────────────────────────────── -->
+    <div class="row g-3 mb-4" id="stats-row">
+        <!-- Rendered by JS -->
+        <div class="col-12 text-center py-4">
+            <div class="spinner-border text-primary" role="status"></div>
+        </div>
+    </div>
+
+    <!-- ── Charts Row ────────────────────────────────────────────────────── -->
+    <div class="row g-3 mb-4">
+        <div class="col-lg-8">
+            <div class="glass-card h-100">
+                <div class="card-header-custom">
+                    <h5 class="card-title-custom">
+                        <i class="bi bi-graph-up me-2 text-primary"></i>Daily Requests
+                    </h5>
+                    <div class="card-actions">
+                        <select class="glass-select glass-select-sm" id="chart-days">
+                            <option value="7">7 days</option>
+                            <option value="14">14 days</option>
+                            <option value="30" selected>30 days</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="card-body-custom">
+                    <canvas id="dailyChart" height="250"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="glass-card h-100">
+                <div class="card-header-custom">
+                    <h5 class="card-title-custom">
+                        <i class="bi bi-pie-chart me-2 text-info"></i>Provider Usage
+                    </h5>
+                </div>
+                <div class="card-body-custom">
+                    <canvas id="providerChart" height="250"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Bottom Row ────────────────────────────────────────────────────── -->
+    <div class="row g-3">
+        <!-- Recent Logs -->
+        <div class="col-lg-7">
+            <div class="glass-card h-100">
+                <div class="card-header-custom">
+                    <h5 class="card-title-custom">
+                        <i class="bi bi-journal-text me-2 text-warning"></i>Recent Requests
+                    </h5>
+                    <a href="/logs-page" class="btn-link-custom">View all →</a>
+                </div>
+                <div class="card-body-custom p-0">
+                    <div class="table-responsive">
+                        <table class="table table-dark table-hover mb-0" id="recent-logs-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Provider</th>
+                                    <th>Model</th>
+                                    <th>Status</th>
+                                    <th>Latency</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recent-logs-body">
+                                <tr>
+                                    <td colspan="5" class="text-center py-3">
+                                        <div class="spinner-border spinner-border-sm text-primary"></div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active Providers -->
+        <div class="col-lg-5">
+            <div class="glass-card h-100">
+                <div class="card-header-custom">
+                    <h5 class="card-title-custom">
+                        <i class="bi bi-grid me-2 text-success"></i>Provider Status
+                    </h5>
+                    <a href="/providers-page" class="btn-link-custom">Manage →</a>
+                </div>
+                <div class="card-body-custom" id="provider-status-list">
+                    <div class="text-center py-4">
+                        <div class="spinner-border text-primary" role="status"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    // ── Dashboard initialization ───────────────────────────────────────────────
+    document.addEventListener('DOMContentLoaded', function () {
+        loadDashboardStats();
+        loadDailyChart(30);
+        loadProviderChart();
+        loadRecentLogs();
+        loadProviderStatus();
+
+        // Auto-refresh every 30 seconds
+        setInterval(() => {
+            loadDashboardStats();
+            loadRecentLogs();
+        }, 30000);
+
+        document.getElementById('chart-days').addEventListener('change', function () {
+            loadDailyChart(parseInt(this.value));
+        });
+    });
+
+    const PROVIDER_ICONS = {
+        groq: '⚡', google_gemini: '♊', openai: '🤖',
+        anthropic: '🎭', openrouter: '🔀', deepseek: '🔍',
+        mistral: '🌬️', huggingface: '🤗', custom: '⚙️'
+    };
+
+    // ── Stats cards ────────────────────────────────────────────────────────────
+    async function loadDashboardStats() {
+        try {
+            const data = await apiGet('/api/stats');
+            const statsRow = document.getElementById('stats-row');
+            statsRow.innerHTML = `
+            ${statCard('Total Providers', data.total_providers, 'bi-grid-3x3-gap', 'primary', data.enabled_providers + ' enabled')}
+            ${statCard('Total Keys', data.total_keys, 'bi-key', 'info', data.active_keys + ' active')}
+            ${statCard('Failed Keys', data.failed_keys, 'bi-exclamation-triangle', 'danger', 'Need attention')}
+            ${statCard('Total Requests', data.total_requests.toLocaleString(), 'bi-send', 'success', data.success_rate + '% success rate')}
+            ${statCard('Success', data.success_requests.toLocaleString(), 'bi-check-circle', 'success', 'Successful calls')}
+            ${statCard('Failed', data.failed_requests.toLocaleString(), 'bi-x-circle', 'danger', 'Failed calls')}
+            ${statCard('Avg Latency', (data.avg_latency_ms || 0) + 'ms', 'bi-lightning', 'warning', 'Response time')}
+            ${statCard('Success Rate', data.success_rate + '%', 'bi-graph-up', 'primary', 'Overall reliability')}
+        `;
+        } catch (e) {
+            console.error('Stats error:', e);
+        }
+    }
+
+    function statCard(label, value, icon, color, sub) {
+        return `
+    <div class="col-6 col-md-4 col-lg-3">
+        <div class="stat-card glass-card">
+            <div class="stat-icon stat-icon-${color}">
+                <i class="bi ${icon}"></i>
+            </div>
+            <div class="stat-content">
+                <div class="stat-value">${value}</div>
+                <div class="stat-label">${label}</div>
+                <div class="stat-sub">${sub}</div>
+            </div>
+        </div>
+    </div>`;
+    }
+
+    // ── Daily chart ────────────────────────────────────────────────────────────
+    let dailyChart = null;
+    async function loadDailyChart(days) {
+        try {
+            const data = await apiGet(`/api/stats/daily?days=${days}`);
+            const labels = data.daily.map(d => d.date);
+            const totals = data.daily.map(d => d.total);
+            const successes = data.daily.map(d => d.success);
+            const failures = data.daily.map(d => d.failed);
+
+            const ctx = document.getElementById('dailyChart').getContext('2d');
+            if (dailyChart) dailyChart.destroy();
+
+            dailyChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'Total',
+                            data: totals,
+                            borderColor: '#6366f1',
+                            backgroundColor: 'rgba(99,102,241,0.1)',
+                            fill: true,
+                            tension: 0.4,
+                        },
+                        {
+                            label: 'Success',
+                            data: successes,
+                            borderColor: '#22c55e',
+                            backgroundColor: 'rgba(34,197,94,0.1)',
+                            fill: true,
+                            tension: 0.4,
+                        },
+                        {
+                            label: 'Failed',
+                            data: failures,
+                            borderColor: '#ef4444',
+                            backgroundColor: 'rgba(239,68,68,0.1)',
+                            fill: true,
+                            tension: 0.4,
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { labels: { color: '#94a3b8' } },
+                        tooltip: { mode: 'index', intersect: false },
+                    },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' } },
+                        y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,0.1)' }, beginAtZero: true },
+                    },
+                },
+            });
+        } catch (e) { console.error('Chart error:', e); }
+    }
+
+    // ── Provider pie chart ─────────────────────────────────────────────────────
+    let providerChart = null;
+    async function loadProviderChart() {
+        try {
+            const data = await apiGet('/api/stats/providers');
+            const used = data.providers.filter(p => p.total > 0);
+            if (!used.length) {
+                document.getElementById('providerChart').parentElement.innerHTML =
+                    '<p class="text-center text-muted py-4">No requests yet</p>';
+                return;
+            }
+            const ctx = document.getElementById('providerChart').getContext('2d');
+            if (providerChart) providerChart.destroy();
+            const colors = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#8b5cf6', '#ec4899', '#14b8a6'];
+            providerChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: used.map(p => p.name),
+                    datasets: [{
+                        data: used.map(p => p.total),
+                        backgroundColor: colors, borderWidth: 0
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'bottom', labels: { color: '#94a3b8', boxWidth: 12 } },
+                    },
+                },
+            });
+        } catch (e) { console.error('Provider chart error:', e); }
+    }
+
+    // ── Recent logs table ──────────────────────────────────────────────────────
+    async function loadRecentLogs() {
+        try {
+            const data = await apiGet('/api/logs?per_page=8');
+            const tbody = document.getElementById('recent-logs-body');
+            if (!data.logs.length) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No requests yet</td></tr>';
+                return;
+            }
+            tbody.innerHTML = data.logs.map(log => `
+            <tr>
+                <td class="text-muted">${timeAgo(log.created_at)}</td>
+                <td><span class="provider-badge">${log.provider_name}</span></td>
+                <td><code class="model-code">${(log.model || '').substring(0, 20)}</code></td>
+                <td>
+                    <span class="status-badge status-${log.status}">
+                        <i class="bi bi-${log.status === 'success' ? 'check' : 'x'}-circle"></i>
+                        ${log.status}
+                    </span>
+                </td>
+                <td class="text-muted">${log.latency_ms ? log.latency_ms + 'ms' : '—'}</td>
+            </tr>
+        `).join('');
+        } catch (e) { console.error('Logs error:', e); }
+    }
+
+    // ── Provider status list ───────────────────────────────────────────────────
+    async function loadProviderStatus() {
+        try {
+            const data = await apiGet('/api/providers');
+            const el = document.getElementById('provider-status-list');
+            if (!data.providers.length) {
+                el.innerHTML = '<p class="text-muted text-center">No providers configured</p>';
+                return;
+            }
+            el.innerHTML = data.providers.map(p => `
+            <div class="provider-status-item">
+                <div class="provider-icon-sm">${PROVIDER_ICONS[p.provider_type] || '🔌'}</div>
+                <div class="provider-info-sm">
+                    <span class="provider-name-sm">${p.display_name}</span>
+                    <span class="provider-keys-sm">${p.active_key_count}/${p.key_count} keys active</span>
+                </div>
+                <div class="provider-status-badge">
+                    <span class="dot-${p.is_enabled && p.active_key_count > 0 ? 'green' : p.is_enabled ? 'yellow' : 'red'}"></span>
+                    <span class="text-muted small">${p.is_enabled ? (p.active_key_count > 0 ? 'Ready' : 'No keys') : 'Disabled'}</span>
+                </div>
+            </div>
+        `).join('');
+        } catch (e) { console.error('Provider status error:', e); }
+    }
+</script>
+{% endblock %}

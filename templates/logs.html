@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}Logs — AI Dashboard{% endblock %}
+{% block page_title %}Request Logs{% endblock %}
+
+{% block content %}
+<div class="page-wrapper">
+
+    <div class="page-header mb-4">
+        <div>
+            <h3 class="page-heading">Request Logs</h3>
+            <p class="page-sub">Full audit trail of all AI API requests</p>
+        </div>
+        <a href="/api/logs/export" class="btn btn-outline-success">
+            <i class="bi bi-download me-2"></i>Export CSV
+        </a>
+    </div>
+
+    <!-- Filters -->
+    <div class="filter-bar glass-card mb-4">
+        <div class="filter-group">
+            <div class="search-box">
+                <i class="bi bi-search search-icon"></i>
+                <input type="text" class="form-control glass-input search-input" id="log-search"
+                    placeholder="Search logs..." oninput="debounceSearch()">
+            </div>
+        </div>
+        <div class="filter-group">
+            <select class="form-select glass-input" id="log-provider" onchange="loadLogs()">
+                <option value="">All Providers</option>
+            </select>
+            <select class="form-select glass-input" id="log-status" onchange="loadLogs()">
+                <option value="">All Status</option>
+                <option value="success">Success</option>
+                <option value="failed">Failed</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Logs table -->
+    <div class="glass-card">
+        <div class="table-responsive">
+            <table class="table table-dark table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Provider</th>
+                        <th>Model</th>
+                        <th>Status</th>
+                        <th>Latency</th>
+                        <th>Tokens</th>
+                        <th>Prompt Preview</th>
+                        <th>Error</th>
+                    </tr>
+                </thead>
+                <tbody id="logs-tbody">
+                    <tr>
+                        <td colspan="8" class="text-center py-4">
+                            <div class="spinner-border text-primary"></div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div id="logs-pagination"></div>
+    </div>
+
+</div>
+
+<script>
+    let logPage = 1;
+    let logSearchTimeout = null;
+
+    document.addEventListener('DOMContentLoaded', async () => {
+        await loadLogProviders();
+        loadLogs();
+    });
+
+    async function loadLogProviders() {
+        try {
+            const data = await apiGet('/api/providers');
+            const sel = document.getElementById('log-provider');
+            data.providers.forEach(p => {
+                sel.innerHTML += `<option value="${p.id}">${p.display_name}</option>`;
+            });
+        } catch (e) { }
+    }
+
+    async function loadLogs() {
+        const search = document.getElementById('log-search').value;
+        const provider = document.getElementById('log-provider').value;
+        const status = document.getElementById('log-status').value;
+
+        let url = `/api/logs?page=${logPage}&per_page=20`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+        if (provider) url += `&provider_id=${provider}`;
+        if (status) url += `&status=${status}`;
+
+        try {
+            const data = await apiGet(url);
+            renderLogs(data.logs);
+            renderLogsPagination(data.page, data.pages, data.total);
+        } catch (e) {
+            document.getElementById('logs-tbody').innerHTML =
+                '<tr><td colspan="8" class="text-center text-danger">Failed to load logs</td></tr>';
+        }
+    }
+
+    function renderLogs(logs) {
+        const tbody = document.getElementById('logs-tbody');
+        if (!logs.length) {
+            tbody.innerHTML = `
+            <tr><td colspan="8" class="text-center py-5">
+                <div class="empty-state">
+                    <i class="bi bi-journal display-4 text-muted"></i>
+                    <p class="mt-2 text-muted">No logs found</p>
+                </div>
+            </td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = logs.map(log => `
+        <tr class="${log.status === 'failed' ? 'table-danger-subtle' : ''}">
+            <td class="text-muted small" title="${log.created_at}">${timeAgo(log.created_at)}</td>
+            <td><span class="provider-badge">${escHtml(log.provider_name)}</span></td>
+            <td><code class="model-code">${escHtml((log.model || '').substring(0, 25))}</code></td>
+            <td>
+                <span class="status-badge status-${log.status}">
+                    <i class="bi bi-${log.status === 'success' ? 'check' : 'x'}-circle"></i>
+                    ${log.status}
+                </span>
+            </td>
+            <td class="text-muted small">${log.latency_ms ? log.latency_ms + 'ms' : '—'}</td>
+            <td class="text-muted small">${log.total_tokens ? log.total_tokens.toLocaleString() : '—'}</td>
+            <td class="text-muted small" style="max-width:200px">
+                <span class="text-truncate d-inline-block" style="max-width:180px"
+                      title="${escHtml(log.prompt_preview || '')}">
+                    ${escHtml((log.prompt_preview || '').substring(0, 60))}${(log.prompt_preview || '').length > 60 ? '…' : ''}
+                </span>
+            </td>
+            <td class="text-danger small">
+                ${log.error_message ? `<span title="${escHtml(log.error_message)}">${escHtml(log.error_message.substring(0, 50))}${log.error_message.length > 50 ? '…' : ''}</span>` : '—'}
+            </td>
+        </tr>
+    `).join('');
+    }
+
+    function renderLogsPagination(page, pages, total) {
+        if (pages <= 1) { document.getElementById('logs-pagination').innerHTML = ''; return; }
+        const el = document.getElementById('logs-pagination');
+        let html = `<div class="d-flex align-items-center gap-2 p-3">
+        <small class="text-muted me-auto">Total: ${total} records</small>`;
+        if (page > 1) html += `<button class="btn btn-sm btn-outline-secondary" onclick="goLogPage(${page - 1})">
+        <i class="bi bi-chevron-left"></i></button>`;
+        html += `<span class="text-muted small">Page ${page} of ${pages}</span>`;
+        if (page < pages) html += `<button class="btn btn-sm btn-outline-secondary" onclick="goLogPage(${page + 1})">
+        <i class="bi bi-chevron-right"></i></button>`;
+        html += '</div>';
+        el.innerHTML = html;
+    }
+
+    function goLogPage(p) { logPage = p; loadLogs(); }
+    function debounceSearch() {
+        clearTimeout(logSearchTimeout);
+        logSearchTimeout = setTimeout(() => { logPage = 1; loadLogs(); }, 400);
+    }
+</script>
+{% endblock %}

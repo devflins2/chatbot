@@ -1,0 +1,306 @@
+{% extends "base.html" %}
+{% block title %}Providers — AI Dashboard{% endblock %}
+{% block page_title %}Provider Management{% endblock %}
+
+{% block content %}
+<div class="page-wrapper">
+
+    <!-- Header -->
+    <div class="page-header mb-4">
+        <div>
+            <h3 class="page-heading">AI Providers</h3>
+            <p class="page-sub">Configure and manage your AI service providers</p>
+        </div>
+        <button class="btn btn-primary" onclick="openAddProvider()">
+            <i class="bi bi-plus-lg me-2"></i>Add Provider
+        </button>
+    </div>
+
+    <!-- Provider grid -->
+    <div class="row g-3" id="providers-grid">
+        <div class="col-12 text-center py-5">
+            <div class="spinner-border text-primary"></div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Add/Edit Provider Modal -->
+<div class="modal fade" id="providerModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content glass-modal">
+            <div class="modal-header">
+                <h5 class="modal-title" id="providerModalTitle">Add Provider</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="providerForm" novalidate>
+                    <input type="hidden" id="editProviderId">
+
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Provider Type</label>
+                            <select class="form-select glass-input" id="providerType"
+                                onchange="applyProviderDefaults()">
+                                <option value="groq">⚡ Groq</option>
+                                <option value="google_gemini">♊ Google Gemini</option>
+                                <option value="openai">🤖 OpenAI</option>
+                                <option value="anthropic">🎭 Anthropic</option>
+                                <option value="openrouter">🔀 OpenRouter</option>
+                                <option value="deepseek">🔍 DeepSeek</option>
+                                <option value="mistral">🌬️ Mistral AI</option>
+                                <option value="huggingface">🤗 Hugging Face</option>
+                                <option value="custom">⚙️ Custom OpenAI-Compatible</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Display Name</label>
+                            <input type="text" class="form-control glass-input" id="providerDisplayName"
+                                placeholder="e.g., My Groq Provider">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Internal Name (unique)</label>
+                            <input type="text" class="form-control glass-input" id="providerName"
+                                placeholder="e.g., groq_main">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Priority (lower = higher)</label>
+                            <input type="number" class="form-control glass-input" id="providerPriority" value="10"
+                                min="0" max="100">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">Base URL</label>
+                            <input type="url" class="form-control glass-input" id="providerBaseUrl"
+                                placeholder="https://api.example.com/v1">
+                        </div>
+                        <div class="col-md-8">
+                            <label class="form-label">Default Model</label>
+                            <input type="text" class="form-control glass-input" id="providerDefaultModel"
+                                placeholder="e.g., gpt-4o">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">Available Models (one per line)</label>
+                            <textarea class="form-control glass-input" id="providerModels" rows="5"
+                                placeholder="gpt-4o&#10;gpt-4-turbo&#10;gpt-3.5-turbo"></textarea>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveProvider()">
+                    <i class="bi bi-check-lg me-1"></i>Save Provider
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const PROVIDER_ICONS = {
+        groq: '⚡', google_gemini: '♊', openai: '🤖', anthropic: '🎭',
+        openrouter: '🔀', deepseek: '🔍', mistral: '🌬️', huggingface: '🤗', custom: '⚙️'
+    };
+    const PROVIDER_COLORS = {
+        groq: '#f59e0b', google_gemini: '#4285f4', openai: '#10a37f', anthropic: '#d97706',
+        openrouter: '#6366f1', deepseek: '#06b6d4', mistral: '#8b5cf6', huggingface: '#ff9900', custom: '#64748b'
+    };
+
+    document.addEventListener('DOMContentLoaded', loadProviders);
+
+    async function loadProviders() {
+        const grid = document.getElementById('providers-grid');
+        try {
+            const data = await apiGet('/api/providers');
+            if (!data.providers.length) {
+                grid.innerHTML = `
+                <div class="col-12 text-center py-5">
+                    <div class="empty-state">
+                        <i class="bi bi-grid-3x3-gap display-1 text-muted"></i>
+                        <h4 class="mt-3">No providers configured</h4>
+                        <p class="text-muted">Add your first AI provider to get started</p>
+                        <button class="btn btn-primary mt-2" onclick="openAddProvider()">
+                            <i class="bi bi-plus-lg me-2"></i>Add Provider
+                        </button>
+                    </div>
+                </div>`;
+                return;
+            }
+            grid.innerHTML = data.providers.map(p => providerCard(p)).join('');
+        } catch (e) {
+            grid.innerHTML = '<div class="col-12"><div class="alert alert-danger">Failed to load providers</div></div>';
+        }
+    }
+
+    function providerCard(p) {
+        const color = PROVIDER_COLORS[p.provider_type] || '#64748b';
+        const icon = PROVIDER_ICONS[p.provider_type] || '🔌';
+        const statusClass = p.is_enabled ? (p.active_key_count > 0 ? 'ready' : 'no-keys') : 'disabled';
+        const statusLabel = p.is_enabled ? (p.active_key_count > 0 ? 'Ready' : 'No Keys') : 'Disabled';
+
+        return `
+    <div class="col-md-6 col-xl-4">
+        <div class="provider-card glass-card" style="--provider-color: ${color}">
+            <div class="provider-card-header">
+                <div class="provider-icon-lg">${icon}</div>
+                <div class="provider-card-info">
+                    <h5 class="provider-card-name">${p.display_name}</h5>
+                    <span class="provider-type-badge">${p.provider_type}</span>
+                </div>
+                <div class="provider-card-actions">
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" role="switch"
+                               id="toggle-${p.id}" ${p.is_enabled ? 'checked' : ''}
+                               onchange="toggleProvider('${p.id}', this)">
+                    </div>
+                </div>
+            </div>
+
+            <div class="provider-card-body">
+                <div class="provider-stat-row">
+                    <div class="provider-stat">
+                        <span class="stat-n">${p.active_key_count}</span>
+                        <span class="stat-l">Active Keys</span>
+                    </div>
+                    <div class="provider-stat">
+                        <span class="stat-n">${p.key_count}</span>
+                        <span class="stat-l">Total Keys</span>
+                    </div>
+                    <div class="provider-stat">
+                        <span class="status-dot-pill status-${statusClass}">${statusLabel}</span>
+                    </div>
+                </div>
+
+                <div class="provider-model">
+                    <i class="bi bi-cpu me-1 text-muted"></i>
+                    <code class="model-code">${p.default_model || 'Not set'}</code>
+                </div>
+
+                ${p.base_url ? `
+                <div class="provider-url">
+                    <i class="bi bi-link-45deg me-1 text-muted"></i>
+                    <small class="text-muted text-truncate">${p.base_url}</small>
+                </div>` : ''}
+            </div>
+
+            <div class="provider-card-footer">
+                <button class="btn btn-sm btn-outline-primary" onclick="openEditProvider('${p.id}')">
+                    <i class="bi bi-pencil me-1"></i>Edit
+                </button>
+                <a href="/api-keys-page?provider=${p.id}" class="btn btn-sm btn-outline-info">
+                    <i class="bi bi-key me-1"></i>Keys
+                </a>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteProvider('${p.id}', '${p.display_name}')">
+                    <i class="bi bi-trash me-1"></i>Delete
+                </button>
+            </div>
+        </div>
+    </div>`;
+    }
+
+    async function toggleProvider(id, checkbox) {
+        try {
+            const data = await apiPost(`/api/providers/${id}/toggle`, {});
+            showToast(data.message, 'success');
+            loadProviders();
+        } catch (e) {
+            checkbox.checked = !checkbox.checked;
+            showToast('Failed to toggle provider', 'danger');
+        }
+    }
+
+    async function applyProviderDefaults() {
+        const type = document.getElementById('providerType').value;
+        try {
+            const data = await apiGet(`/api/providers/defaults/${type}`);
+            if (data.base_url) document.getElementById('providerBaseUrl').value = data.base_url;
+            if (data.models && data.models.length) {
+                document.getElementById('providerModels').value = data.models.join('\n');
+                document.getElementById('providerDefaultModel').value = data.models[0];
+            }
+            // Auto-set display name if empty
+            const displayNames = {
+                groq: 'Groq', google_gemini: 'Google Gemini', openai: 'OpenAI', anthropic: 'Anthropic',
+                openrouter: 'OpenRouter', deepseek: 'DeepSeek', mistral: 'Mistral AI', huggingface: 'Hugging Face'
+            };
+            if (!document.getElementById('providerDisplayName').value) {
+                document.getElementById('providerDisplayName').value = displayNames[type] || '';
+            }
+        } catch (e) { }
+    }
+
+    function openAddProvider() {
+        document.getElementById('editProviderId').value = '';
+        document.getElementById('providerModalTitle').textContent = 'Add Provider';
+        document.getElementById('providerForm').reset();
+        applyProviderDefaults();
+        new bootstrap.Modal('#providerModal').show();
+    }
+
+    async function openEditProvider(id) {
+        try {
+            const data = await apiGet('/api/providers');
+            const p = data.providers.find(x => x.id === id);
+            if (!p) return;
+
+            document.getElementById('editProviderId').value = id;
+            document.getElementById('providerModalTitle').textContent = 'Edit Provider';
+            document.getElementById('providerType').value = p.provider_type;
+            document.getElementById('providerDisplayName').value = p.display_name;
+            document.getElementById('providerName').value = p.name;
+            document.getElementById('providerBaseUrl').value = p.base_url || '';
+            document.getElementById('providerDefaultModel').value = p.default_model || '';
+            document.getElementById('providerPriority').value = p.priority;
+            document.getElementById('providerModels').value = (p.available_models || []).join('\n');
+
+            new bootstrap.Modal('#providerModal').show();
+        } catch (e) {
+            showToast('Failed to load provider details', 'danger');
+        }
+    }
+
+    async function saveProvider() {
+        const id = document.getElementById('editProviderId').value;
+        const models = document.getElementById('providerModels').value
+            .split('\n').map(m => m.trim()).filter(m => m);
+
+        const payload = {
+            name: document.getElementById('providerName').value.trim(),
+            display_name: document.getElementById('providerDisplayName').value.trim(),
+            provider_type: document.getElementById('providerType').value,
+            base_url: document.getElementById('providerBaseUrl').value.trim(),
+            default_model: document.getElementById('providerDefaultModel').value.trim(),
+            available_models: models,
+            priority: parseInt(document.getElementById('providerPriority').value) || 0,
+        };
+
+        if (!payload.display_name) { showToast('Display name is required', 'danger'); return; }
+
+        try {
+            let result;
+            if (id) {
+                result = await apiPut(`/api/providers/${id}`, payload);
+            } else {
+                if (!payload.name) { showToast('Internal name is required', 'danger'); return; }
+                result = await apiPost('/api/providers', payload);
+            }
+            showToast(result.message, 'success');
+            bootstrap.Modal.getInstance('#providerModal').hide();
+            loadProviders();
+        } catch (e) {
+            showToast(e.message || 'Failed to save provider', 'danger');
+        }
+    }
+
+    async function deleteProvider(id, name) {
+        if (!confirm(`Delete provider "${name}"? This will also delete all its API keys.`)) return;
+        try {
+            const data = await apiDelete(`/api/providers/${id}`);
+            showToast(data.message, 'success');
+            loadProviders();
+        } catch (e) {
+            showToast('Failed to delete provider', 'danger');
+        }
+    }
+</script>
+{% endblock %}
