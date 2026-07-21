@@ -241,10 +241,11 @@ def _seed_database():
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
+env = os.environ.get("FLASK_ENV", "production")
+app = create_app(env)
+
 if __name__ == "__main__":
-    env = os.environ.get("FLASK_ENV", "development")
-    application = create_app(env)
-    application.run(
+    app.run(
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 5000)),
         debug=(env == "development"),
