@@ -6,7 +6,6 @@ import logging
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, jsonify, request
 from flask_login import login_required
-from sqlalchemy import func
 
 from models.database import db, Log, Provider, APIKey, Setting
 
